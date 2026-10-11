@@ -1,0 +1,8 @@
+[functions.ai-generate-questions]
+verify_jwt = true
+
+[functions.ai-explain]
+verify_jwt = true
+
+[functions.ai-analyze]
+verify_jwt = true
