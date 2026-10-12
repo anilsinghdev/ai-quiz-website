@@ -52,7 +52,10 @@ interface AuthContextValue {
     email: string;
     password: string;
   }) => Promise<{ error: string | null }>;
-  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
+  signIn: (
+    email: string,
+    password: string
+  ) => Promise<{ error: string | null }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -64,7 +67,9 @@ const SESSION_KEY = 'demo_auth_session';
 
 function readAccounts(): StoredAccount[] {
   try {
-    return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]');
+    const saved = localStorage.getItem(ACCOUNTS_KEY);
+    const parsed: unknown = JSON.parse(saved || '[]');
+    return Array.isArray(parsed) ? (parsed as StoredAccount[]) : [];
   } catch {
     return [];
   }
@@ -77,7 +82,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string) => {
-    const account = readAccounts().find((item) => item.user.id === userId);
+    const account = readAccounts().find(
+      (item) => item.user.id === userId
+    );
     setProfile(account?.profile ?? null);
   }, []);
 
@@ -112,7 +119,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const normalizedEmail = email.trim().toLowerCase();
       const normalizedUsername = username.trim();
 
-      if (!fullName.trim() || !normalizedUsername || !normalizedEmail || !password) {
+      if (
+        !fullName.trim() ||
+        !normalizedUsername ||
+        !normalizedEmail ||
+        !password
+      ) {
         return { error: 'Please fill in all fields.' };
       }
 
@@ -131,10 +143,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (
         accounts.some(
           (item) =>
-            item.profile.username.toLowerCase() === normalizedUsername.toLowerCase()
+            item.profile.username.toLowerCase() ===
+            normalizedUsername.toLowerCase()
         )
       ) {
-        return { error: 'This username is already taken. Please choose another.' };
+        return {
+          error: 'This username is already taken. Please choose another.',
+        };
       }
 
       const newUser: DemoUser = {
@@ -231,7 +246,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 }
 
-export function useAuth() {
+function useAuthHook() {
   const ctx = useContext(AuthContext);
 
   if (!ctx) {
@@ -240,4 +255,6 @@ export function useAuth() {
 
   return ctx;
 }
+
+export { useAuthHook as useAuth };
 ```
