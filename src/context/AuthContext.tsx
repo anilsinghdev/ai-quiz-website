@@ -1,12 +1,48 @@
+```tsx
 import {
-  createContext, useContext, useEffect, useState, useCallback, type ReactNode,
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  type ReactNode,
 } from 'react';
-import type { Session, User } from '@supabase/supabase-js';
-import { supabase, type UserProfile } from '@/lib/supabase';
+
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string;
+  username: string;
+  avatar_url: string | null;
+  bio: string | null;
+  role: 'user' | 'admin';
+  created_at: string;
+}
+
+interface DemoUser {
+  id: string;
+  email: string;
+  user_metadata: {
+    full_name: string;
+    username: string;
+  };
+}
+
+interface DemoSession {
+  user: DemoUser;
+  access_token: string;
+  token_type: string;
+}
+
+interface StoredAccount {
+  user: DemoUser;
+  profile: UserProfile;
+  password: string;
+}
 
 interface AuthContextValue {
-  session: Session | null;
-  user: User | null;
+  session: DemoSession | null;
+  user: DemoUser | null;
   profile: UserProfile | null;
   loading: boolean;
   isAdmin: boolean;
@@ -23,119 +59,172 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-function mapSupabaseAuthError(message: string): string {
-  if (message.includes('User already registered')) return 'An account with this email already exists.';
-  if (message.includes('Invalid login credentials')) return 'Incorrect email or password.';
-  if (message.includes('Email not confirmed')) return 'Please confirm your email before signing in.';
-  if (message.includes('Password should be at least')) return 'Password must be at least 8 characters.';
-  if (message.includes('Unable to validate email address')) return 'Please enter a valid email address.';
-  if (message.includes('over_email_send_rate_limit')) return 'Too many attempts. Please wait a moment and try again.';
-  return message;
+const ACCOUNTS_KEY = 'demo_auth_accounts';
+const SESSION_KEY = 'demo_auth_session';
+
+function readAccounts(): StoredAccount[] {
+  try {
+    return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]');
+  } catch {
+    return [];
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
+  const [session, setSession] = useState<DemoSession | null>(null);
+  const [user, setUser] = useState<DemoUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = useCallback(async (userId: string) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, email, full_name, username, avatar_url, bio, role, created_at')
-      .eq('id', userId)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Failed to fetch profile:', error.message);
-      return;
-    }
-    setProfile(data as UserProfile | null);
+    const account = readAccounts().find((item) => item.user.id === userId);
+    setProfile(account?.profile ?? null);
   }, []);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      if (data.session?.user) {
-        fetchProfile(data.session.user.id).finally(() => setLoading(false));
-      } else {
-        setLoading(false);
-      }
-    });
+    try {
+      const savedSession = localStorage.getItem(SESSION_KEY);
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      setUser(newSession?.user ?? null);
-      if (newSession?.user) {
-        (async () => {
-          await fetchProfile(newSession.user.id);
-        })();
-      } else {
-        setProfile(null);
-      }
-    });
+      if (savedSession) {
+        const parsed = JSON.parse(savedSession) as DemoSession;
+        const account = readAccounts().find(
+          (item) => item.user.id === parsed.user.id
+        );
 
-    return () => {
-      authListener.subscription.unsubscribe();
-    };
-  }, [fetchProfile]);
+        if (account) {
+          setSession(parsed);
+          setUser(account.user);
+          setProfile(account.profile);
+        } else {
+          localStorage.removeItem(SESSION_KEY);
+        }
+      }
+    } catch {
+      localStorage.removeItem(SESSION_KEY);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   const signUp = useCallback<AuthContextValue['signUp']>(
     async ({ fullName, username, email, password }) => {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: { full_name: fullName, username },
+      const accounts = readAccounts();
+      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedUsername = username.trim();
+
+      if (!fullName.trim() || !normalizedUsername || !normalizedEmail || !password) {
+        return { error: 'Please fill in all fields.' };
+      }
+
+      if (password.length < 8) {
+        return { error: 'Password must be at least 8 characters.' };
+      }
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return { error: 'Please enter a valid email address.' };
+      }
+
+      if (accounts.some((item) => item.user.email === normalizedEmail)) {
+        return { error: 'An account with this email already exists.' };
+      }
+
+      if (
+        accounts.some(
+          (item) =>
+            item.profile.username.toLowerCase() === normalizedUsername.toLowerCase()
+        )
+      ) {
+        return { error: 'This username is already taken. Please choose another.' };
+      }
+
+      const newUser: DemoUser = {
+        id: crypto.randomUUID(),
+        email: normalizedEmail,
+        user_metadata: {
+          full_name: fullName.trim(),
+          username: normalizedUsername,
         },
+      };
+
+      const newProfile: UserProfile = {
+        id: newUser.id,
+        email: normalizedEmail,
+        full_name: fullName.trim(),
+        username: normalizedUsername,
+        avatar_url: null,
+        bio: null,
+        role: 'user',
+        created_at: new Date().toISOString(),
+      };
+
+      accounts.push({
+        user: newUser,
+        profile: newProfile,
+        password,
       });
 
-      if (error) return { error: mapSupabaseAuthError(error.message) };
-
-      if (data.user) {
-        const { error: profileError } = await supabase.from('profiles').insert({
-          id: data.user.id,
-          email,
-          full_name: fullName,
-          username,
-          avatar_url: null,
-          bio: null,
-        });
-
-        if (profileError) {
-          if (profileError.code === '23505' && profileError.message.includes('username')) {
-            return { error: 'This username is already taken. Please choose another.' };
-          }
-          return { error: 'Account created, but we could not save your profile. Please try signing in.' };
-        }
-      }
+      localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(accounts));
 
       return { error: null };
     },
     []
   );
 
-  const signIn = useCallback<AuthContextValue['signIn']>(async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) return { error: mapSupabaseAuthError(error.message) };
-    return { error: null };
-  }, []);
+  const signIn = useCallback<AuthContextValue['signIn']>(
+    async (email, password) => {
+      const normalizedEmail = email.trim().toLowerCase();
+      const account = readAccounts().find(
+        (item) => item.user.email === normalizedEmail
+      );
+
+      if (!account || account.password !== password) {
+        return { error: 'Incorrect email or password.' };
+      }
+
+      const newSession: DemoSession = {
+        user: account.user,
+        access_token: crypto.randomUUID(),
+        token_type: 'bearer',
+      };
+
+      localStorage.setItem(SESSION_KEY, JSON.stringify(newSession));
+      setSession(newSession);
+      setUser(account.user);
+      setProfile(account.profile);
+
+      return { error: null };
+    },
+    []
+  );
 
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem(SESSION_KEY);
+    setSession(null);
+    setUser(null);
     setProfile(null);
   }, []);
 
   const refreshProfile = useCallback(async () => {
-    if (user) await fetchProfile(user.id);
+    if (user) {
+      await fetchProfile(user.id);
+    }
   }, [user, fetchProfile]);
 
   const isAdmin = profile?.role === 'admin';
 
   return (
     <AuthContext.Provider
-      value={{ session, user, profile, loading, isAdmin, signUp, signIn, signOut, refreshProfile }}
+      value={{
+        session,
+        user,
+        profile,
+        loading,
+        isAdmin,
+        signUp,
+        signIn,
+        signOut,
+        refreshProfile,
+      }}
     >
       {children}
     </AuthContext.Provider>
@@ -144,6 +233,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
+
+  if (!ctx) {
+    throw new Error('useAuth must be used within AuthProvider');
+  }
+
   return ctx;
 }
+```
